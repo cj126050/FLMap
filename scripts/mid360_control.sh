@@ -23,6 +23,7 @@ BASE_DIR="${MID360_BAG_DIR:-$HOME/bags}"
 CTRL_DIR="$(cd "$(dirname "$0")" && pwd)"       # scripts/ 目录
 WS_DIR="$(cd "$CTRL_DIR/.." && pwd)"            # 工作空间根（仓库根）
 PCD_SCRIPT="$CTRL_DIR/bag_to_pcd.py"
+ENV_CHECK_SCRIPT="$CTRL_DIR/env_check.sh"
 LOG_DIR=/tmp/mid360_ctrl
 mkdir -p "$LOG_DIR"
 
@@ -52,6 +53,7 @@ REC_PID=""          # 录包进程
 RVZ_PID=""          # RViz 进程
 TASK_DIR=""         # 当前任务目录
 REC_STATE="idle"    # idle / recording / paused
+ENV_CHECKED=0       # 是否已做（或已跳过）首次环境检查
 
 # 颜色
 G='\033[0;32m'; Y='\033[1;33m'; R='\033[0;31m'; C='\033[0;36m'; N='\033[0m'
@@ -93,11 +95,41 @@ start_driver_mapping() {
     [ "$WITH_RVIZ" = "1" ] && log "  RViz 日志: $LOG_DIR/rviz.log"
 }
 
+# 首次 start 前询问并执行环境检查
+ask_env_check() {
+    [ "$ENV_CHECKED" = "1" ] && return 0
+    ENV_CHECKED=1
+    echo ""
+    echo -e "${C}首次扫描前，是否需要做一次环境检查？${N}"
+    echo -e "${C}  (y) 是 —— 扫描本机环境，判断是否满足实时建图要求${N}"
+    echo -e "${C}  (n) 否 —— 跳过，直接开始扫描${N}"
+    printf "${G}是否检查环境 [y/N]: ${N}"
+    read -r ans
+    case "$ans" in
+        y|Y|yes|YES)
+            echo ""
+            if [ -x "$ENV_CHECK_SCRIPT" ]; then
+                bash "$ENV_CHECK_SCRIPT"
+            else
+                log "${R}未找到环境检查脚本 $ENV_CHECK_SCRIPT${N}"
+            fi
+            echo ""
+            ;;
+        *)
+            log "${Y}已跳过环境检查${N}"
+            ;;
+    esac
+}
+
 do_start() {
     if [ "$REC_STATE" = "recording" ] || [ "$REC_STATE" = "paused" ]; then
         log "${Y}当前已有进行中的任务（$TASK_DIR），请先 stop${N}"
         return
     fi
+
+    # 首次 start 前询问是否做环境检查
+    ask_env_check
+
     local ts; ts=$(date +%Y-%m-%d_%H-%M-%S)
     TASK_DIR="$BASE_DIR/$ts"
     mkdir -p "$TASK_DIR"
@@ -196,13 +228,22 @@ do_status() {
 
 do_help() {
     echo -e "${C}可用命令:${N}"
-    echo "  start  开始新扫描（建目录 + 录包）"
+    echo "  start  开始新扫描（首次会询问是否做环境检查）"
     echo "  pause  暂停录包"
     echo "  resume 继续录包"
     echo "  stop   停止录包并生成 PCD"
     echo "  status 查看状态"
+    echo "  env    手动执行一次环境检查"
     echo "  quit   退出（自动 stop + 关闭驱动/建图/RViz）"
     echo "  help   显示本帮助"
+}
+
+do_env() {
+    if [ -x "$ENV_CHECK_SCRIPT" ]; then
+        bash "$ENV_CHECK_SCRIPT"
+    else
+        log "${R}未找到环境检查脚本 $ENV_CHECK_SCRIPT${N}"
+    fi
 }
 
 do_quit() {
@@ -238,6 +279,7 @@ while true; do
         resume) do_resume ;;
         stop)   do_stop ;;
         status) do_status ;;
+        env)    do_env ;;
         quit)   do_quit; exit 0 ;;
         help)   do_help ;;
         "")     ;;
